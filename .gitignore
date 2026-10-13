@@ -1,0 +1,9 @@
+node_modules/
+dist/
+uploads/
+*.zip
+recovered-docs/
+.env
+.env.*
+!.env.example
+.DS_Store
