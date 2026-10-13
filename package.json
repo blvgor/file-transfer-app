@@ -2,17 +2,19 @@
   "name": "file-transfer-app",
   "version": "1.1.0",
   "private": true,
+  "type": "module",
   "workspaces": [
     "backend",
     "frontend"
   ],
   "scripts": {
-    "build": "npm run build --workspaces",
+    "build": "node scripts/patch-blob-utf8.mjs && npm run build --workspaces",
+    "build:vercel": "npm run build && node scripts/build-vercel.mjs",
     "start": "node backend/dist/server.js",
     "test": "node --test test/*.test.mjs",
     "cleanup": "node backend/dist/cleanup.js"
   },
   "engines": {
-    "node": ">=24.11.0"
+    "node": "24.x"
   }
 }

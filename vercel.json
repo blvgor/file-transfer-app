@@ -1,0 +1,7 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "framework": "hono",
+  "buildCommand": "npm run build:vercel",
+  "functions": { "server.ts": { "includeFiles": "public/index.html" } },
+  "crons": [{ "path": "/api/cleanup", "schedule": "0 3 * * *" }]
+}

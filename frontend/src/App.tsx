@@ -2,11 +2,16 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { Link, Route, Routes, useLocation, useNavigate, useParams } from 'react-router-dom';
 
 const API_BASE = (import.meta.env.VITE_API_BASE || '').replace(/\/$/, '');
-type FileInfo = { id: string; filename: string; size: number; url: string; uploadDate?: number };
+type FileInfo = { id: string; filename: string; size: number; url: string; uploadDate?: number; expiresAt?: number };
 function formatSize(bytes: number) {
   if (!bytes) return '0 B';
   const index = Math.floor(Math.log(bytes) / Math.log(1024));
   return `${(bytes / 1024 ** index).toFixed(1)} ${['B', 'KB', 'MB', 'GB', 'TB'][index]}`;
+}
+function errorMessage(value: unknown, fallback: string) {
+  if (typeof value === 'string' && value) return value;
+  if (value && typeof value === 'object' && 'message' in value && typeof value.message === 'string') return value.message;
+  return fallback;
 }
 
 function UploadScreen() {
@@ -14,6 +19,8 @@ function UploadScreen() {
   const input = useRef<HTMLInputElement>(null);
   const busy = useRef(false);
   const request = useRef<XMLHttpRequest | null>(null);
+  const uploadMode = useRef<string | null>(null);
+  const preparing = useRef<AbortController | null>(null);
   const [file, setFile] = useState<File | null>(null);
   const [uploading, setUploading] = useState(false);
   const [progress, setProgress] = useState(0);
@@ -26,31 +33,65 @@ function UploadScreen() {
     fetch(`${API_BASE}/health`, { signal: controller.signal }).then(response => {
       if (!response.ok) throw new Error();
       return response.json();
-    }).then(data => { setLimit(data.maxFileSize); setRetention(data.retentionDays); }).catch(() => {});
-    return () => { controller.abort(); request.current?.abort(); };
+    }).then(data => { uploadMode.current = data.uploadMode || 'local'; setLimit(data.maxFileSize); setRetention(data.retentionDays); }).catch(() => {});
+    return () => { controller.abort(); preparing.current?.abort(); request.current?.abort(); };
   }, []);
 
-  const upload = useCallback((selected: File) => {
+  const upload = useCallback(async (selected: File) => {
     if (busy.current) return;
     if (limit && selected.size > limit) { setError(`File exceeds the ${formatSize(limit)} limit.`); return; }
     busy.current = true;
     setFile(selected); setUploading(true); setProgress(0); setError('');
+    const fail = (message: unknown) => { busy.current = false; setUploading(false); setError(errorMessage(message, 'Upload failed. Please try again.')); };
+    let transfer: (FileInfo & { uploadUrl: string }) | null = null;
+    try {
+      if (!uploadMode.current) {
+        const configuration = await fetch(`${API_BASE}/health`);
+        if (!configuration.ok) throw new Error('The transfer service is temporarily unavailable.');
+        const data = await configuration.json();
+        uploadMode.current = data.uploadMode || 'local';
+        setLimit(data.maxFileSize); setRetention(data.retentionDays);
+      }
+      if (uploadMode.current === 'signed') {
+        preparing.current = new AbortController();
+        const response = await fetch(`${API_BASE}/api/prepare`, { method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ filename: selected.name, size: selected.size }),
+          signal: preparing.current.signal });
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.error || 'The transfer could not be started.');
+        transfer = data;
+      }
+    } catch (reason) {
+      if ((reason as Error).name !== 'AbortError') fail((reason as Error).message || 'The transfer could not be started.');
+      return;
+    }
     const xhr = new XMLHttpRequest();
     request.current = xhr;
-    const fail = (message: string) => { busy.current = false; setUploading(false); setError(message); };
     xhr.upload.onprogress = event => { if (event.lengthComputable) setProgress(event.loaded / event.total * 100); };
-    xhr.onload = () => {
-      busy.current = false;
+    xhr.onload = async () => {
       const data = xhr.response;
-      if (xhr.status === 200 && data?.id && data?.url && data?.filename) {
-        navigate('/result', { state: data });
+      if (transfer && xhr.status >= 200 && xhr.status < 300) {
+        try {
+          const response = await fetch(`${API_BASE}/api/file/${transfer.id}?filename=${encodeURIComponent(transfer.filename)}`);
+          if (!response.ok) throw new Error('The uploaded file could not be verified. Please try again.');
+          const verified: FileInfo = await response.json();
+          if (verified.size !== selected.size) throw new Error('The uploaded file is incomplete. Please try again.');
+          busy.current = false; setUploading(false); navigate('/result', { state: verified });
+        } catch (reason) { fail((reason as Error).message); }
+      } else if (!transfer && xhr.status === 200 && data?.id && data?.url && data?.filename) {
+        busy.current = false; setUploading(false); navigate('/result', { state: data });
       } else fail(data?.error || 'Upload failed. Please try again.');
     };
     xhr.onerror = () => fail('The server could not be reached. Please try again.');
     xhr.onabort = () => { busy.current = false; setUploading(false); };
-    xhr.open('POST', `${API_BASE}/upload`);
+    xhr.open(transfer ? 'PUT' : 'POST', transfer ? transfer.uploadUrl : `${API_BASE}/upload`);
     xhr.responseType = 'json';
-    xhr.setRequestHeader('X-Filename', encodeURIComponent(selected.name));
+    if (transfer) {
+      xhr.setRequestHeader('Content-Type', 'application/octet-stream');
+      xhr.setRequestHeader('X-Content-Type', 'application/octet-stream');
+    }
+    else xhr.setRequestHeader('X-Filename', encodeURIComponent(selected.name));
     xhr.send(selected);
   }, [navigate, limit]);
   useEffect(() => {
@@ -105,6 +146,7 @@ function ResultScreen() {
       <button className="button" onClick={copy}>{copied ? 'Copied' : 'Copy link'}</button>
     </div>
     <p className="small muted" role="status">{copyError ? 'Select and copy the link manually.' : 'Anyone with this link can download the file until it expires.'}</p>
+    {state.expiresAt && <p className="small muted">Available until {new Date(state.expiresAt).toLocaleString()}.</p>}
     <Link className="button" to={state.url}>Open download page</Link>
     <Link className="text-link" to="/">Transfer another file</Link>
   </section>;
@@ -117,7 +159,7 @@ function DownloadScreen() {
   useEffect(() => {
     const controller = new AbortController();
     setInfo(null); setError('');
-    fetch(`${API_BASE}/api/file/${id}`, { signal: controller.signal }).then(async response => {
+    fetch(`${API_BASE}/api/file/${id}?filename=${encodeURIComponent(filename || '')}`, { signal: controller.signal }).then(async response => {
       if (!response.ok) throw new Error('File not found or expired.');
       const data: FileInfo = await response.json();
       if (data.filename !== filename) throw new Error('File not found or expired.');
@@ -129,6 +171,7 @@ function DownloadScreen() {
     <h1 id="download-title">{error ? 'File unavailable' : info ? 'Ready to download' : 'Loading file'}</h1>
     {error ? <p className="error" role="alert">{error}</p> : info ? <>
       <p className="filename">{info.filename}</p><p className="muted">{formatSize(info.size)}</p>
+      {info.expiresAt && <p className="small muted">Available until {new Date(info.expiresAt).toLocaleString()}.</p>}
       <a className="button download" href={`${API_BASE}/download/${id}/${encodeURIComponent(info.filename)}`} download={info.filename}>Download file</a>
     </> : <span className="loading" role="status">Loading…</span>}
     <Link className="text-link" to="/">Transfer a file</Link>

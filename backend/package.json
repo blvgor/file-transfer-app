@@ -9,8 +9,9 @@
     "cleanup": "tsx src/cleanup.ts"
   },
   "dependencies": {
-    "hono": "^4.0.0",
     "@hono/node-server": "^1.8.0",
+    "@vercel/blob": "2.8.1",
+    "hono": "^4.0.0",
     "nanoid": "^5.0.0"
   },
   "devDependencies": {

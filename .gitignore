@@ -1,5 +1,6 @@
 node_modules/
 dist/
+public/
 uploads/
 *.zip
 recovered-docs/
@@ -7,3 +8,4 @@ recovered-docs/
 .env.*
 !.env.example
 .DS_Store
+.vercel

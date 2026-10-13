@@ -32,3 +32,4 @@ p { line-height: 1.55; margin: 12px 0; text-wrap: balance; }
 @media (max-width: 680px) { .panel.wide { width: 100%; } }
 @media (max-width: 480px) { .app { padding: 16px; align-items: flex-start; } .panel { width: 100%; padding: 32px 24px; margin: 32px 0; } .link-row { flex-direction: column; } .link-row input { width: 100%; flex: auto; } }
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation: none !important; transition: none !important; } }
+button:focus-visible, a:focus-visible, input:focus-visible { outline: 0; background: #ededed !important; color: #111 !important; }
